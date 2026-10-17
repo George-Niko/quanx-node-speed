@@ -47,7 +47,7 @@ IP 信息请求也会通过当前节点发送，结果中会按“IP 原生性 �
 
 状态颜色说明：🟢 原生/家庭住宅 ISP；🔵 移动 ISP；🔴 机房、代理、VPN 或非住宅网络；🟠 数据不足或无法确认。
 
-上传测速不会复用上一次请求体，也不手动设置 `Content-Length`，以避免 Quantumult X 第二次 `$task.fetch` 出现“无效内容”。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
+上传测速使用 Cloudflare 官方格式的 `__up?bytes=<n>` 请求，并为每次请求重新生成零内容请求体；不手动设置 `Content-Length`，以减少 Quantumult X 第二次 `$task.fetch` 出现“无效内容”的概率。如果上传接口仍被当前网络或 Quantumult X 拒绝，脚本会保留 IP、延迟和下载结果，并将上传显示为“未完成”，不会整次失败。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
 
 - https://github.com/cloudflare/speedtest#config-options
 - https://speed.cloudflare.com/

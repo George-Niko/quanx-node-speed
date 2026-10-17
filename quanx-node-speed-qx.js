@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r6";
+const SCRIPT_VERSION = "2026-10-17.r7";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -47,9 +47,9 @@ async function run() {
 
     const startedAt = Date.now();
     const profileTask = discoverIPProfile();
-    const latency = await measureLatency();
-    const download = await measureDirection("download");
-    const upload = await measureDirection("upload");
+    const latency = await measureLatencySafe();
+    const download = await measureDirectionSafe("download");
+    const upload = await measureDirectionSafe("upload");
     const profile = await profileTask;
     const elapsedSeconds = (Date.now() - startedAt) / 1000;
 
@@ -64,9 +64,9 @@ async function run() {
             `🏠 家宽 ISP：${profile.isp.home.label}${profile.isp.home.detail ? `（${profile.isp.home.detail}）` : ""}`,
             `📡 ISP：${profile.isp.primary || "🟠 未识别"}`,
             "",
-            `📶 延迟：${formatLatency(latency)} ms`,
-            `⬇️ 下载：${formatSpeed(download.bps)} Mbps`,
-            `⬆️ 上传：${formatSpeed(upload.bps)} Mbps`,
+            `📶 延迟：${latency.error ? `🟠 未完成（${latency.error}）` : `${formatLatency(latency.value)} ms`}`,
+            `⬇️ 下载：${formatMeasurement(download)}`,
+            `⬆️ 上传：${formatMeasurement(upload)}`,
             `🧪 样本：下载 ${download.points.length} 次 / 上传 ${upload.points.length} 次`,
             `⏱️ 耗时：${elapsedSeconds.toFixed(1)} 秒`,
             "",
@@ -280,6 +280,30 @@ async function measureLatency() {
     return Math.max(1, Date.now() - startedAt);
 }
 
+async function measureLatencySafe() {
+    try {
+        return { value: await measureLatency(), error: "" };
+    } catch (error) {
+        console.log(`[WARN] latency failed: ${errorMessage(error)}`);
+        return { value: 0, error: errorMessage(error) };
+    }
+}
+
+async function measureDirectionSafe(direction) {
+    try {
+        return await measureDirection(direction);
+    } catch (error) {
+        console.log(`[WARN] ${direction} failed: ${errorMessage(error)}`);
+        return { bps: 0, points: [], error: errorMessage(error) };
+    }
+}
+
+function formatMeasurement(result) {
+    return result && result.error
+        ? `🟠 未完成（${result.error}）`
+        : `${formatSpeed(result.bps)} Mbps`;
+}
+
 async function measureDirection(direction) {
     const points = [];
     const bytes = direction === "download" ? CONFIG.downloadBytes : CONFIG.uploadBytes;
@@ -293,7 +317,7 @@ async function measureDirection(direction) {
             try {
                 point = direction === "download"
                     ? await measureDownload(bytes)
-                    : await measureUpload(bytes, index);
+                    : await measureUpload(bytes);
                 break;
             } catch (error) {
                 lastError = error;
@@ -332,13 +356,13 @@ async function measureDownload(bytes) {
     };
 }
 
-async function measureUpload(bytes, sampleIndex) {
-    const body = buildUploadBody(bytes, `${sampleIndex}-${cacheBust()}`);
+async function measureUpload(bytes) {
+    const body = buildUploadBody(bytes);
     const startedAt = Date.now();
-    await request("POST", `${CONFIG.uploadUrl}?r=${cacheBust()}`, {
+    await request("POST", `${CONFIG.uploadUrl}?bytes=${bytes}&r=${cacheBust()}`, {
         body,
         headers: {
-            "Content-Type": "application/octet-stream",
+            "Content-Type": "text/plain;charset=UTF-8",
         },
     });
     const durationMs = Math.max(1, Date.now() - startedAt);
@@ -384,11 +408,8 @@ function readNodeName() {
     return String($environment.params || "").trim();
 }
 
-function buildUploadBody(bytes, seed) {
-    const chunk = `${String(seed || "qx")}-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_.~`;
-    let body = "";
-    while (body.length < bytes) body += chunk;
-    return body.slice(0, bytes);
+function buildUploadBody(bytes) {
+    return "0".repeat(Math.max(0, Number(bytes) || 0));
 }
 
 function wait(milliseconds) {
