@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r2";
+const SCRIPT_VERSION = "2026-10-17.r3";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -56,6 +56,9 @@ async function run() {
         message: [
             `🌐 IP：${profile.ip}`,
             `🧼 IP 纯净度：${profile.purity.label}${profile.purity.detail ? `（${profile.purity.detail}）` : ""}`,
+            `🗺️ IP 原生性：${profile.isp.native.label}${profile.isp.native.detail ? `（${profile.isp.native.detail}）` : ""}`,
+            `🏷️ 标记：${profile.isp.marker.label}${profile.isp.marker.detail ? `（${profile.isp.marker.detail}）` : ""}`,
+            `📡 运营商类型：${profile.isp.type.label}${profile.isp.type.detail ? `（${profile.isp.type.detail}）` : ""}`,
             `🏠 家宽 ISP：${profile.isp.home.label}${profile.isp.home.detail ? `（${profile.isp.home.detail}）` : ""}`,
             `🔀 双 ISP：${profile.isp.dual.label}${profile.isp.dual.detail ? `（${profile.isp.dual.detail}）` : ""}`,
             `📡 ISP：${profile.isp.primary || "⚪ 未识别"}`,
@@ -107,35 +110,131 @@ function classifyISP(ippure, ipapi) {
     const asn = ipapi && ipapi.asn ? ipapi.asn : {};
     const candidates = [
         ippure && ippure.isp,
+        ippure && ippure.organization,
         company.name,
+        company.network,
         asn.org,
+        asn.name,
+        ipapi && ipapi.isp,
+        ipapi && ipapi.organization,
         ippure && ippure.asOrganization,
     ];
     const providers = uniqueProviders(candidates);
-    const primary = providers[0] || "";
-    const type = cleanValue(company.type);
-    const signalText = [type, company.name, asn.org, ippure && ippure.isp].filter(Boolean).join(" ");
+    const primary = firstNonEmpty([
+        ippure && ippure.isp,
+        company.name,
+        asn.org,
+        company.network,
+        ippure && ippure.organization,
+    ]) || providers[0] || "";
+    const type = cleanValue(company.type || ipapi.type);
+    const signalText = [
+        type,
+        company.name,
+        company.network,
+        asn.org,
+        asn.name,
+        ippure && ippure.isp,
+        ippure && ippure.organization,
+    ].filter(Boolean).join(" ");
     const normalized = signalText.toLowerCase();
-    const datacenter = ipapi && ipapi.datacenter
-        ? Object.keys(ipapi.datacenter).some((key) => cleanValue(ipapi.datacenter[key]))
-        : false;
-    const hostingSignal = datacenter || /(hosting|data\s*center|datacenter|cloud|server|transit|cdn|vpn|proxy)/i.test(normalized);
-    const residentialSignal = /(residential|fixed\s*line\s*isp|mobile\s*isp|broadband|cable|fiber|telecom|wireless|\bisp\b)/i.test(normalized);
+    const datacenterSignal = hasPositiveFlag(ipapi, [
+        "is_datacenter", "isDatacenter", "datacenter", "is_hosting", "isHosting", "hosting",
+    ]) || hasPositiveFlag(company, ["is_datacenter", "isDatacenter", "datacenter", "is_hosting", "isHosting"]);
+    const mobileSignal = hasPositiveFlag(ipapi, ["is_mobile", "isMobile", "mobile"])
+        || hasPositiveFlag(company, ["is_mobile", "isMobile", "mobile"]);
+    const vpnSignal = hasPositiveFlag(ipapi, ["is_vpn", "isVpn", "vpn"]);
+    const proxySignal = hasPositiveFlag(ipapi, ["is_proxy", "isProxy", "proxy"]);
+    const torSignal = hasPositiveFlag(ipapi, ["is_tor", "isTor", "tor"]);
+    const residentialSignal = hasPositiveFlag(ipapi, ["is_residential", "isResidential", "residential"])
+        || hasPositiveFlag(company, ["is_residential", "isResidential", "residential"])
+        || /^(isp|residential|fixed[\s_-]*line|broadband|telecom|cable|fiber|wireless)$/i.test(type)
+        || /(residential|fixed\s*line|broadband|cable|fiber|telecom|wireless|\bisp\b)/i.test(normalized);
+    const hostingSignal = datacenterSignal
+        || /^(hosting|datacenter|data[\s_-]*center|cloud|server|transit|cdn)$/i.test(type)
+        || /(hosting|data\s*center|datacenter|cloud|server|transit|cdn)/i.test(normalized);
+    const blockedSignal = hostingSignal || vpnSignal || proxySignal || torSignal;
+
+    const location = ipapi && ipapi.location ? ipapi.location : {};
+    const country = firstNonEmpty([
+        location.country,
+        location.country_name,
+        ipapi && ipapi.country,
+        ippure && ippure.country,
+    ]);
+    const countryCode = firstNonEmpty([
+        location.country_code,
+        location.countryCode,
+        ipapi && ipapi.country_code,
+        ipapi && ipapi.countryCode,
+    ]);
+    const countryText = [countryFlag(countryCode), country].filter(Boolean).join(" ");
 
     let home;
-    if (hostingSignal) {
-        home = { label: "🔴 否", detail: type || "检测到机房/云服务信号" };
+    if (blockedSignal) {
+        home = { label: "🔴 否", detail: type || "检测到机房、代理或 VPN 信号" };
     } else if (residentialSignal) {
-        home = { label: "🟢 是", detail: type || "检测到 ISP/宽带信号" };
+        home = { label: "🟢 是", detail: type || "检测到家庭宽带/ISP 信号" };
     } else {
         home = { label: "⚪ 未知", detail: type || "数据不足，不能确认" };
     }
 
+    const marker = blockedSignal
+        ? { label: "🔴 机房/代理 IP", detail: vpnSignal ? "VPN" : proxySignal ? "Proxy" : torSignal ? "Tor" : "Datacenter/Hosting" }
+        : residentialSignal
+            ? { label: "🟢 家庭住宅 IP", detail: mobileSignal ? "移动 ISP" : "固定宽带 ISP" }
+            : { label: "⚪ 未识别", detail: "数据库没有返回住宅/机房标记" };
+
+    const operatorType = blockedSignal
+        ? { label: "🔴 Hosting/IDC", detail: type || "机房或云服务" }
+        : mobileSignal
+            ? { label: "🟢 Mobile ISP", detail: "移动运营商" }
+            : residentialSignal
+                ? { label: "🟢 ISP", detail: "住宅/宽带运营商" }
+                : { label: "⚪ 未知", detail: type || "缺少运营商类型" };
+
+    const native = blockedSignal
+        ? { label: "🔴 非原生 IP", detail: countryText || "检测到代理/机房信号" }
+        : residentialSignal
+            ? { label: "🟢 原生 IP", detail: countryText || "住宅 ISP" }
+            : { label: "⚪ 待确认", detail: countryText || "数据不足" };
+
     const dual = providers.length > 1
         ? { label: "🟠 疑似", detail: providers.slice(0, 2).join(" / ") }
-        : { label: "⚪ 未识别", detail: "未发现两个独立网络名称" };
+        : providers.length === 1
+            ? { label: "🟢 否", detail: `单一网络：${providers[0]}` }
+            : { label: "⚪ 未知", detail: "没有可用于对比的 ISP/ASN 名称" };
 
-    return { primary, providers, home, dual };
+    return { primary, providers, home, dual, marker, type: operatorType, native, country, countryCode };
+}
+
+function firstNonEmpty(values) {
+    for (let index = 0; index < (values || []).length; index += 1) {
+        const value = cleanValue(values[index]);
+        if (value) return value;
+    }
+    return "";
+}
+
+function hasPositiveFlag(source, names) {
+    if (!source || typeof source !== "object") return false;
+    return (names || []).some((name) => isPositiveFlag(source[name]));
+}
+
+function isPositiveFlag(value) {
+    if (value === true || value === 1) return true;
+    if (typeof value === "string") return /^(true|yes|y|1|on)$/i.test(value.trim());
+    if (!value || typeof value !== "object") return false;
+    return Object.keys(value).some((key) => isPositiveFlag(value[key]));
+}
+
+function countryFlag(code) {
+    const normalized = cleanValue(code).toUpperCase();
+    if (!/^[A-Z]{2}$/.test(normalized)) return "";
+    return String.fromCodePoint(
+        normalized.charCodeAt(0) + 127397,
+        normalized.charCodeAt(1) + 127397,
+    );
 }
 
 function uniqueProviders(values) {
