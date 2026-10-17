@@ -34,6 +34,7 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 - `downloadBytes`：默认 5 MB；网络很快时可改为 `10 * 1000 * 1000`。
 - `uploadBytes`：默认 2 MB；上传速度较快时可改为 `5 * 1000 * 1000`。
 - `samples`：默认每个方向测试 2 次，最终取中位数。
+- `uploadRetries`：上传请求失败时额外重试次数，默认 1 次；每次重试都会重新生成请求内容。
 
 每次运行大约会消耗：下载 `5 MB × 2`、上传 `2 MB × 2`，另外有一次很小的延迟请求。请避免频繁连续执行。
 
@@ -43,7 +44,7 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 
 IP 信息请求也会通过当前节点发送，结果中会按“IP 原生性 → 标记 → 运营商类型 → 家宽 ISP → 双 ISP → ISP 名称”的顺序展示出口信息。脚本会优先读取 `ipapi.is` 的 `is_datacenter`、`is_mobile`、`is_vpn`、`is_proxy`、`is_tor`、`company.type`、`company.name` 和 ASN 字段，再与 IPPure 的 ISP/组织名称交叉比较。家宽 ISP 与双 ISP 都是基于公开数据库字段的判断：数据库缺失、命名不一致或存在分流时会显示“未知/疑似”，不能替代人工核验或付费 IP 数据库。
 
-下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
+上传测速不会复用上一次请求体，也不手动设置 `Content-Length`，以避免 Quantumult X 第二次 `$task.fetch` 出现“无效内容”。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
 
 - https://github.com/cloudflare/speedtest#config-options
 - https://speed.cloudflare.com/

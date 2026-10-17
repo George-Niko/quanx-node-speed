@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r3";
+const SCRIPT_VERSION = "2026-10-17.r4";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -28,6 +28,7 @@ const CONFIG = Object.freeze({
     downloadBytes: 5 * 1000 * 1000,
     uploadBytes: 2 * 1000 * 1000,
     samples: 2,
+    uploadRetries: 1,
     userAgent: "QuantumultX-NodeSpeed/1.0",
 });
 
@@ -268,14 +269,13 @@ async function measureLatency() {
 async function measureDirection(direction) {
     const points = [];
     const bytes = direction === "download" ? CONFIG.downloadBytes : CONFIG.uploadBytes;
-    const body = direction === "upload" ? buildUploadBody(bytes) : null;
     let lastError = null;
 
     for (let index = 0; index < CONFIG.samples; index += 1) {
         try {
             const point = direction === "download"
                 ? await measureDownload(bytes)
-                : await measureUpload(bytes, body);
+                : await measureUpload(bytes, index);
             points.push(point);
             console.log(`[INFO] ${direction} #${index + 1}: ${formatSpeed(point.bps)} Mbps`);
         } catch (error) {
@@ -309,22 +309,37 @@ async function measureDownload(bytes) {
     };
 }
 
-async function measureUpload(bytes, body) {
-    const startedAt = Date.now();
-    await request("POST", `${CONFIG.uploadUrl}?r=${cacheBust()}`, {
-        body,
-        headers: {
-            "Content-Type": "text/plain;charset=UTF-8",
-            "Content-Length": String(bytes),
-        },
-    });
-    const durationMs = Math.max(1, Date.now() - startedAt);
+async function measureUpload(bytes, sampleIndex) {
+    let lastError = null;
+    const attempts = Math.max(1, Number(CONFIG.uploadRetries) + 1);
 
-    return {
-        bps: bytes * 8 * 1000 / durationMs,
-        durationMs,
-        bytes,
-    };
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const body = buildUploadBody(bytes, `${sampleIndex}-${attempt}-${cacheBust()}`);
+        const startedAt = Date.now();
+        try {
+            await request("POST", `${CONFIG.uploadUrl}?r=${cacheBust()}`, {
+                body,
+                headers: {
+                    "Content-Type": "application/octet-stream",
+                },
+            });
+            const durationMs = Math.max(1, Date.now() - startedAt);
+
+            return {
+                bps: bytes * 8 * 1000 / durationMs,
+                durationMs,
+                bytes,
+            };
+        } catch (error) {
+            lastError = error;
+            if (attempt + 1 < attempts) {
+                console.log(`[WARN] upload sample ${sampleIndex + 1} retry: ${errorMessage(error)}`);
+                await wait(150);
+            }
+        }
+    }
+
+    throw lastError || new Error("上传请求失败");
 }
 
 function request(method, url, options) {
@@ -361,11 +376,15 @@ function readNodeName() {
     return String($environment.params || "").trim();
 }
 
-function buildUploadBody(bytes) {
-    const chunk = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_.~";
+function buildUploadBody(bytes, seed) {
+    const chunk = `${String(seed || "qx")}-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_.~`;
     let body = "";
     while (body.length < bytes) body += chunk;
     return body.slice(0, bytes);
+}
+
+function wait(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function header(headers, name) {
