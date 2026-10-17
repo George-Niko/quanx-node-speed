@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r7";
+const SCRIPT_VERSION = "2026-10-17.r8";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -493,9 +493,10 @@ function cacheBust() {
 }
 
 function finish(result) {
+    const message = String(result.message || "");
     $done({
         title: result.title,
-        message: result.message,
+        htmlMessage: `<div style="font-family:-apple-system;font-size:15px;line-height:1.5">${escapeHtml(message).replace(/\n/g, "<br>")}</div>`,
         icon: "bolt.fill",
     });
 }
@@ -509,4 +510,13 @@ function finishError(message) {
 
 function errorMessage(error) {
     return error && error.message ? String(error.message) : String(error || "未知错误");
+}
+
+function escapeHtml(value) {
+    return String(value === null || typeof value === "undefined" ? "" : value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 }
