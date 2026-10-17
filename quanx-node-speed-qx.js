@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r4";
+const SCRIPT_VERSION = "2026-10-17.r5";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -28,7 +28,8 @@ const CONFIG = Object.freeze({
     downloadBytes: 5 * 1000 * 1000,
     uploadBytes: 2 * 1000 * 1000,
     samples: 2,
-    uploadRetries: 1,
+    uploadSamples: 1,
+    sampleRetries: 1,
     userAgent: "QuantumultX-NodeSpeed/1.0",
 });
 
@@ -139,6 +140,9 @@ function classifyISP(ippure, ipapi) {
         ippure && ippure.organization,
     ].filter(Boolean).join(" ");
     const normalized = signalText.toLowerCase();
+    const ippureResidential = hasPositiveFlag(ippure, ["isResidential", "is_residential", "residential"]);
+    const ippureNonResidential = hasNegativeFlag(ippure, ["isResidential", "is_residential", "residential"]);
+    const ippureBroadcast = hasPositiveFlag(ippure, ["isBroadcast", "is_broadcast", "broadcast"]);
     const datacenterSignal = hasPositiveFlag(ipapi, [
         "is_datacenter", "isDatacenter", "datacenter", "is_hosting", "isHosting", "hosting",
     ]) || hasPositiveFlag(company, ["is_datacenter", "isDatacenter", "datacenter", "is_hosting", "isHosting"]);
@@ -147,14 +151,16 @@ function classifyISP(ippure, ipapi) {
     const vpnSignal = hasPositiveFlag(ipapi, ["is_vpn", "isVpn", "vpn"]);
     const proxySignal = hasPositiveFlag(ipapi, ["is_proxy", "isProxy", "proxy"]);
     const torSignal = hasPositiveFlag(ipapi, ["is_tor", "isTor", "tor"]);
-    const residentialSignal = hasPositiveFlag(ipapi, ["is_residential", "isResidential", "residential"])
+    const residentialSignal = ippureResidential
+        || hasPositiveFlag(ipapi, ["is_residential", "isResidential", "residential"])
         || hasPositiveFlag(company, ["is_residential", "isResidential", "residential"])
         || /^(isp|residential|fixed[\s_-]*line|broadband|telecom|cable|fiber|wireless)$/i.test(type)
         || /(residential|fixed\s*line|broadband|cable|fiber|telecom|wireless|\bisp\b)/i.test(normalized);
-    const hostingSignal = datacenterSignal
+    const nonResidentialSignal = ippureNonResidential && !residentialSignal;
+    const hostingSignal = datacenterSignal || ippureBroadcast
         || /^(hosting|datacenter|data[\s_-]*center|cloud|server|transit|cdn)$/i.test(type)
         || /(hosting|data\s*center|datacenter|cloud|server|transit|cdn)/i.test(normalized);
-    const blockedSignal = hostingSignal || vpnSignal || proxySignal || torSignal;
+    const blockedSignal = hostingSignal || vpnSignal || proxySignal || torSignal || nonResidentialSignal;
 
     const location = ipapi && ipapi.location ? ipapi.location : {};
     const country = firstNonEmpty([
@@ -222,11 +228,22 @@ function hasPositiveFlag(source, names) {
     return (names || []).some((name) => isPositiveFlag(source[name]));
 }
 
+function hasNegativeFlag(source, names) {
+    if (!source || typeof source !== "object") return false;
+    return (names || []).some((name) => isNegativeFlag(source[name]));
+}
+
 function isPositiveFlag(value) {
     if (value === true || value === 1) return true;
     if (typeof value === "string") return /^(true|yes|y|1|on)$/i.test(value.trim());
     if (!value || typeof value !== "object") return false;
     return Object.keys(value).some((key) => isPositiveFlag(value[key]));
+}
+
+function isNegativeFlag(value) {
+    if (value === false || value === 0) return true;
+    if (typeof value === "string") return /^(false|no|n|0|off)$/i.test(value.trim());
+    return false;
 }
 
 function countryFlag(code) {
@@ -270,17 +287,26 @@ async function measureDirection(direction) {
     const points = [];
     const bytes = direction === "download" ? CONFIG.downloadBytes : CONFIG.uploadBytes;
     let lastError = null;
+    const sampleCount = direction === "upload" ? CONFIG.uploadSamples : CONFIG.samples;
+    const attempts = Math.max(1, Number(CONFIG.sampleRetries) + 1);
 
-    for (let index = 0; index < CONFIG.samples; index += 1) {
-        try {
-            const point = direction === "download"
-                ? await measureDownload(bytes)
-                : await measureUpload(bytes, index);
+    for (let index = 0; index < sampleCount; index += 1) {
+        let point = null;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+            try {
+                point = direction === "download"
+                    ? await measureDownload(bytes)
+                    : await measureUpload(bytes, index);
+                break;
+            } catch (error) {
+                lastError = error;
+                console.log(`[WARN] ${direction} #${index + 1} attempt ${attempt + 1}: ${errorMessage(error)}`);
+                if (attempt + 1 < attempts) await wait(350);
+            }
+        }
+        if (point) {
             points.push(point);
             console.log(`[INFO] ${direction} #${index + 1}: ${formatSpeed(point.bps)} Mbps`);
-        } catch (error) {
-            lastError = error;
-            console.log(`[WARN] ${direction} #${index + 1}: ${errorMessage(error)}`);
         }
     }
 
@@ -310,36 +336,21 @@ async function measureDownload(bytes) {
 }
 
 async function measureUpload(bytes, sampleIndex) {
-    let lastError = null;
-    const attempts = Math.max(1, Number(CONFIG.uploadRetries) + 1);
+    const body = buildUploadBody(bytes, `${sampleIndex}-${cacheBust()}`);
+    const startedAt = Date.now();
+    await request("POST", `${CONFIG.uploadUrl}?r=${cacheBust()}`, {
+        body,
+        headers: {
+            "Content-Type": "application/octet-stream",
+        },
+    });
+    const durationMs = Math.max(1, Date.now() - startedAt);
 
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-        const body = buildUploadBody(bytes, `${sampleIndex}-${attempt}-${cacheBust()}`);
-        const startedAt = Date.now();
-        try {
-            await request("POST", `${CONFIG.uploadUrl}?r=${cacheBust()}`, {
-                body,
-                headers: {
-                    "Content-Type": "application/octet-stream",
-                },
-            });
-            const durationMs = Math.max(1, Date.now() - startedAt);
-
-            return {
-                bps: bytes * 8 * 1000 / durationMs,
-                durationMs,
-                bytes,
-            };
-        } catch (error) {
-            lastError = error;
-            if (attempt + 1 < attempts) {
-                console.log(`[WARN] upload sample ${sampleIndex + 1} retry: ${errorMessage(error)}`);
-                await wait(150);
-            }
-        }
-    }
-
-    throw lastError || new Error("上传请求失败");
+    return {
+        bps: bytes * 8 * 1000 / durationMs,
+        durationMs,
+        bytes,
+    };
 }
 
 function request(method, url, options) {
