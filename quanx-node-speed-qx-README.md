@@ -11,7 +11,7 @@
 - 标记：家庭住宅 IP、机房/代理 IP
 - 运营商类型：ISP、Mobile ISP、Hosting/IDC
 - 家宽 ISP 判断
-- 多来源 ISP/ASN 名称对比，用于提示疑似双 ISP
+- 用颜色圆球区分住宅、移动、机房/代理和未知状态
 
 ## 安装
 
@@ -43,7 +43,9 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 
 测速请求通过 Quantumult X 的 `opts.policy` 指定当前节点，因此结果反映的是“本地网络 → 当前节点 → Cloudflare 边缘”的综合表现，不等同于服务器网卡的理论峰值。不同时间、地区、移动网络和测速边缘节点都会造成结果变化。
 
-IP 信息请求也会通过当前节点发送，结果中会按“IP 原生性 → 标记 → 运营商类型 → 家宽 ISP → 双 ISP → ISP 名称”的顺序展示出口信息。脚本优先读取 IPPure 的 `isResidential`、`isBroadcast`、`isp`、国家字段，再读取 `ipapi.is` 的 `is_datacenter`、`is_mobile`、`is_vpn`、`is_proxy`、`is_tor`、`company.type`、`company.name` 和 ASN 字段，最后进行交叉比较。家宽 ISP 与双 ISP 都是基于公开数据库字段的判断：数据库缺失、命名不一致或存在分流时会显示“未知/疑似”，不能替代人工核验或付费 IP 数据库。
+IP 信息请求也会通过当前节点发送，结果中会按“IP 原生性 → 标记 → 运营商类型 → 家宽 ISP → ISP 名称”的顺序展示出口信息。脚本优先读取 IPPure 的 `isResidential`、`isBroadcast`、`isp`、国家字段，再读取 `ipapi.is` 的 `is_datacenter`、`is_mobile`、`is_vpn`、`is_proxy`、`is_tor`、`company.type`、`company.name` 和 ASN 字段，最后进行交叉比较。家宽 ISP 判断基于公开数据库字段：数据库缺失、命名不一致或存在分流时会显示“未知”，不能替代人工核验或付费 IP 数据库。
+
+状态颜色说明：🟢 原生/家庭住宅 ISP；🔵 移动 ISP；🔴 机房、代理、VPN 或非住宅网络；🟠 数据不足或无法确认。
 
 上传测速不会复用上一次请求体，也不手动设置 `Content-Length`，以避免 Quantumult X 第二次 `$task.fetch` 出现“无效内容”。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
 

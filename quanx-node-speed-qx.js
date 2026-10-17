@@ -17,7 +17,7 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r5";
+const SCRIPT_VERSION = "2026-10-17.r6";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
@@ -62,8 +62,7 @@ async function run() {
             `🏷️ 标记：${profile.isp.marker.label}${profile.isp.marker.detail ? `（${profile.isp.marker.detail}）` : ""}`,
             `📡 运营商类型：${profile.isp.type.label}${profile.isp.type.detail ? `（${profile.isp.type.detail}）` : ""}`,
             `🏠 家宽 ISP：${profile.isp.home.label}${profile.isp.home.detail ? `（${profile.isp.home.detail}）` : ""}`,
-            `🔀 双 ISP：${profile.isp.dual.label}${profile.isp.dual.detail ? `（${profile.isp.dual.detail}）` : ""}`,
-            `📡 ISP：${profile.isp.primary || "⚪ 未识别"}`,
+            `📡 ISP：${profile.isp.primary || "🟠 未识别"}`,
             "",
             `📶 延迟：${formatLatency(latency)} ms`,
             `⬇️ 下载：${formatSpeed(download.bps)} Mbps`,
@@ -90,7 +89,7 @@ async function discoverIPProfile() {
     if (!results[1].ok) console.log(`[WARN] ipapi.is: ${results[1].error}`);
 
     return {
-        ip: ip || "⚪ 未获取",
+        ip: ip || "🟠 未获取",
         purity: classifyPurity(ippure.fraudScore),
         isp: classifyISP(ippure, ipapi),
     };
@@ -99,7 +98,7 @@ async function discoverIPProfile() {
 function classifyPurity(value) {
     const score = numberOrNull(value);
     if (score === null || score < 0 || score > 100) {
-        return { label: "⚪ 未知", detail: "IPPure 未返回风险分" };
+        return { label: "🟠 未知", detail: "IPPure 未返回风险分" };
     }
     if (score < 40) return { label: "🟢 较纯净", detail: `风险 ${score}/100` };
     if (score < 70) return { label: "🟠 一般", detail: `风险 ${score}/100` };
@@ -183,36 +182,34 @@ function classifyISP(ippure, ipapi) {
     } else if (residentialSignal) {
         home = { label: "🟢 是", detail: mobileSignal ? "移动 ISP" : "固定宽带 ISP" };
     } else {
-        home = { label: "⚪ 未知", detail: type || "数据不足，不能确认" };
+        home = { label: "🟠 未知", detail: type || "数据不足，不能确认" };
     }
 
     const marker = blockedSignal
-        ? { label: "🔴 机房/代理 IP", detail: vpnSignal ? "VPN" : proxySignal ? "Proxy" : torSignal ? "Tor" : "Datacenter/Hosting" }
+        ? { label: "🔴 机房/代理 IP", detail: vpnSignal ? "VPN" : proxySignal ? "Proxy" : torSignal ? "Tor" : hostingSignal ? "Datacenter/Hosting" : "IPPure 判定为非住宅网络" }
+        : mobileSignal
+            ? { label: "🔵 移动网络 IP", detail: "Mobile ISP" }
         : residentialSignal
             ? { label: "🟢 家庭住宅 IP", detail: mobileSignal ? "移动 ISP" : "固定宽带 ISP" }
-            : { label: "⚪ 未识别", detail: "数据库没有返回住宅/机房标记" };
+            : { label: "🟠 未识别", detail: "数据库没有返回住宅/机房标记" };
 
     const operatorType = blockedSignal
-        ? { label: "🔴 Hosting/IDC", detail: type || "机房或云服务" }
+        ? hostingSignal
+            ? { label: "🔴 Hosting/IDC", detail: type || "机房或云服务" }
+            : { label: "🔴 非住宅网络", detail: type || "检测到非住宅、代理或 VPN 信号" }
         : mobileSignal
-            ? { label: "🟢 Mobile ISP", detail: "移动运营商" }
+            ? { label: "🔵 Mobile ISP", detail: "移动运营商" }
             : residentialSignal
                 ? { label: "🟢 ISP", detail: "住宅/宽带运营商" }
-                : { label: "⚪ 未知", detail: type || "缺少运营商类型" };
+                : { label: "🟠 未知", detail: type || "缺少运营商类型" };
 
     const native = blockedSignal
         ? { label: "🔴 非原生 IP", detail: countryText || "检测到代理/机房信号" }
         : residentialSignal
             ? { label: "🟢 原生 IP", detail: countryText || "住宅 ISP" }
-            : { label: "⚪ 待确认", detail: countryText || "数据不足" };
+        : { label: "🟠 待确认", detail: countryText || "数据不足" };
 
-    const dual = providers.length > 1
-        ? { label: "🟠 疑似", detail: providers.slice(0, 2).join(" / ") }
-        : providers.length === 1
-            ? { label: "🟢 否", detail: `单一网络：${providers[0]}` }
-            : { label: "⚪ 未知", detail: "没有可用于对比的 ISP/ASN 名称" };
-
-    return { primary, providers, home, dual, marker, type: operatorType, native, country, countryCode };
+    return { primary, providers, home, marker, type: operatorType, native, country, countryCode };
 }
 
 function firstNonEmpty(values) {
