@@ -174,7 +174,7 @@ function classifyISP(ippure, ipapi) {
     if (blockedSignal) {
         home = { label: "🔴 否", detail: type || "检测到机房、代理或 VPN 信号" };
     } else if (residentialSignal) {
-        home = { label: "🟢 是", detail: type || "检测到家庭宽带/ISP 信号" };
+        home = { label: "🟢 是", detail: mobileSignal ? "移动 ISP" : "固定宽带 ISP" };
     } else {
         home = { label: "⚪ 未知", detail: type || "数据不足，不能确认" };
     }
