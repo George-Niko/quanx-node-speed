@@ -7,11 +7,7 @@
 - 上传速度
 - 当前节点出口 IP
 - IPPure 风险分数对应的 IP 纯净度分档
-- IP 原生性判断（优先读取 IPPure `isResidential`）
-- 标记：家庭住宅 IP、机房/代理 IP
-- 运营商类型：ISP、Mobile ISP、Hosting/IDC
-- 家宽 ISP 判断
-- 用颜色圆球区分住宅、移动、机房/代理和未知状态
+- 用颜色圆球区分家庭住宅、移动、机房/代理和未知状态
 
 ## 安装
 
@@ -36,6 +32,8 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 - `samples`：默认每个方向测试 2 次，最终取中位数。
 - `uploadSamples`：上传默认测试 1 次，避免 Quantumult X 连续 POST 大请求出现无效内容。
 - `sampleRetries`：任意测速样本失败时的额外重试次数，默认 1 次；重试会重新生成请求和随机参数。
+- `latencyBytes`：延迟探针默认返回 1 字节，避免部分节点不兼容空响应。
+- `latencyRetries`：延迟失败时的额外重试次数，默认 2 次。
 
 每次运行大约会消耗：下载 `5 MB × 2`、上传 `2 MB × 2`，另外有一次很小的延迟请求。请避免频繁连续执行。
 
@@ -43,11 +41,11 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 
 测速请求通过 Quantumult X 的 `opts.policy` 指定当前节点，因此结果反映的是“本地网络 → 当前节点 → Cloudflare 边缘”的综合表现，不等同于服务器网卡的理论峰值。不同时间、地区、移动网络和测速边缘节点都会造成结果变化。
 
-IP 信息请求也会通过当前节点发送，结果中会按“IP 原生性 → 标记 → 运营商类型 → 家宽 ISP → ISP 名称”的顺序展示出口信息。脚本优先读取 IPPure 的 `isResidential`、`isBroadcast`、`isp`、国家字段，再读取 `ipapi.is` 的 `is_datacenter`、`is_mobile`、`is_vpn`、`is_proxy`、`is_tor`、`company.type`、`company.name` 和 ASN 字段，最后进行交叉比较。家宽 ISP 判断基于公开数据库字段：数据库缺失、命名不一致或存在分流时会显示“未知”，不能替代人工核验或付费 IP 数据库。
+IP 信息请求也会通过当前节点发送。结果优先展示延迟、下载、上传和测速耗时，之后显示出口 IP、IP 纯净度和一个颜色球标识的 IP 状态。脚本优先读取 IPPure 的 `isResidential`、`isBroadcast`、`isp`、国家字段，再读取 `ipapi.is` 的 `is_datacenter`、`is_mobile`、`is_vpn`、`is_proxy`、`is_tor`、`company.type`、`company.name` 和 ASN 字段，最后进行交叉比较。公开数据库字段缺失、命名不一致或存在分流时会显示“未知”，颜色判断不能替代人工核验或付费 IP 数据库。
 
 状态颜色说明：🟢 原生/家庭住宅 ISP；🔵 移动 ISP；🔴 机房、代理、VPN 或非住宅网络；🟠 数据不足或无法确认。
 
-结果使用 Quantumult X `event-interaction` 支持的 `htmlMessage` 返回，避免普通 `message` 被 QX 判断为“无有效内容”。上传测速使用 Cloudflare 官方格式的 `__up?bytes=<n>` 请求，并为每次请求重新生成零内容请求体；不手动设置 `Content-Length`，以减少 Quantumult X 第二次 `$task.fetch` 出现“无效内容”的概率。如果上传接口仍被当前网络或 Quantumult X 拒绝，脚本会保留 IP、延迟和下载结果，并将上传显示为“未完成”，不会整次失败。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
+结果使用 Quantumult X `event-interaction` 支持的 `htmlMessage` 返回，避免普通 `message` 被 QX 判断为“无有效内容”。测速请求每次都会添加随机参数并重新生成上传请求体；延迟使用 1 字节有效响应，且延迟、下载、上传失败都会进行有限重试。错误对象会提取可读字段，避免界面出现 `[object Object]`。如果上传接口仍被当前网络、节点策略或 Quantumult X 拒绝，脚本会保留 IP、延迟和下载结果，并将上传显示为“未完成”，不会整次失败。下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
 
 - https://github.com/cloudflare/speedtest#config-options
 - https://speed.cloudflare.com/

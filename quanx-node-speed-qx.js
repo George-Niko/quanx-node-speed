@@ -17,19 +17,20 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r8";
+const SCRIPT_VERSION = "2026-10-17.r9";
 const IPPURE_URL = "https://my.ippure.com/v1/info";
 const IPAPI_URL = "https://api.ipapi.is/";
 
 const CONFIG = Object.freeze({
     downloadUrl: "https://speed.cloudflare.com/__down",
     uploadUrl: "https://speed.cloudflare.com/__up",
-    latencyBytes: 0,
+    latencyBytes: 1,
     downloadBytes: 5 * 1000 * 1000,
     uploadBytes: 2 * 1000 * 1000,
     samples: 2,
     uploadSamples: 1,
     sampleRetries: 1,
+    latencyRetries: 2,
     userAgent: "QuantumultX-NodeSpeed/1.0",
 });
 
@@ -56,19 +57,15 @@ async function run() {
     finish({
         title: `⚡️ ${SCRIPT_NAME} · ${nodeName}`,
         message: [
-            `🌐 IP：${profile.ip}`,
-            `🧼 IP 纯净度：${profile.purity.label}${profile.purity.detail ? `（${profile.purity.detail}）` : ""}`,
-            `🗺️ IP 原生性：${profile.isp.native.label}${profile.isp.native.detail ? `（${profile.isp.native.detail}）` : ""}`,
-            `🏷️ 标记：${profile.isp.marker.label}${profile.isp.marker.detail ? `（${profile.isp.marker.detail}）` : ""}`,
-            `📡 运营商类型：${profile.isp.type.label}${profile.isp.type.detail ? `（${profile.isp.type.detail}）` : ""}`,
-            `🏠 家宽 ISP：${profile.isp.home.label}${profile.isp.home.detail ? `（${profile.isp.home.detail}）` : ""}`,
-            `📡 ISP：${profile.isp.primary || "🟠 未识别"}`,
-            "",
             `📶 延迟：${latency.error ? `🟠 未完成（${latency.error}）` : `${formatLatency(latency.value)} ms`}`,
             `⬇️ 下载：${formatMeasurement(download)}`,
             `⬆️ 上传：${formatMeasurement(upload)}`,
             `🧪 样本：下载 ${download.points.length} 次 / 上传 ${upload.points.length} 次`,
             `⏱️ 耗时：${elapsedSeconds.toFixed(1)} 秒`,
+            "",
+            `🌐 IP：${profile.ip}`,
+            `🧼 IP 纯净度：${profile.purity.label}${profile.purity.detail ? `（${profile.purity.detail}）` : ""}`,
+            `🛡️ IP 状态：${profile.isp.marker.label}${profile.isp.marker.detail ? `（${profile.isp.marker.detail}）` : ""}`,
             "",
             "🛡️ IP 信息请求与测速请求均按当前节点转发。",
             "☁️ 测速源：speed.cloudflare.com",
@@ -281,12 +278,18 @@ async function measureLatency() {
 }
 
 async function measureLatencySafe() {
-    try {
-        return { value: await measureLatency(), error: "" };
-    } catch (error) {
-        console.log(`[WARN] latency failed: ${errorMessage(error)}`);
-        return { value: 0, error: errorMessage(error) };
+    let lastError = null;
+    const attempts = Math.max(1, Number(CONFIG.latencyRetries) + 1);
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+            return { value: await measureLatency(), error: "" };
+        } catch (error) {
+            lastError = error;
+            console.log(`[WARN] latency attempt ${attempt + 1}: ${errorMessage(error)}`);
+            if (attempt + 1 < attempts) await wait(350);
+        }
     }
+    return { value: 0, error: errorMessage(lastError) };
 }
 
 async function measureDirectionSafe(direction) {
@@ -509,7 +512,24 @@ function finishError(message) {
 }
 
 function errorMessage(error) {
-    return error && error.message ? String(error.message) : String(error || "未知错误");
+    if (error === null || typeof error === "undefined") return "未知错误";
+    if (typeof error === "string") return error.trim() || "未知错误";
+    if (typeof error !== "object") return String(error);
+
+    const fields = ["message", "error", "localizedDescription", "description", "reason", "msg"];
+    for (let index = 0; index < fields.length; index += 1) {
+        const value = error[fields[index]];
+        if (typeof value === "string" && value.trim()) return value.trim();
+        if (typeof value === "number" || typeof value === "boolean") return String(value);
+    }
+
+    try {
+        const serialized = JSON.stringify(error);
+        if (serialized && serialized !== "{}") return serialized;
+    } catch (_) {
+        // Ignore circular error objects and use the generic fallback below.
+    }
+    return "未知错误";
 }
 
 function escapeHtml(value) {
