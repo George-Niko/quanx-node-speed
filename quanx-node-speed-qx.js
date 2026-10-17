@@ -17,7 +17,9 @@
  */
 
 const SCRIPT_NAME = "节点网速测速";
-const SCRIPT_VERSION = "2026-10-17.r1";
+const SCRIPT_VERSION = "2026-10-17.r2";
+const IPPURE_URL = "https://my.ippure.com/v1/info";
+const IPAPI_URL = "https://api.ipapi.is/";
 
 const CONFIG = Object.freeze({
     downloadUrl: "https://speed.cloudflare.com/__down",
@@ -42,24 +44,119 @@ async function run() {
     console.log(`[INFO] 节点: ${nodeName}`);
 
     const startedAt = Date.now();
+    const profileTask = discoverIPProfile();
     const latency = await measureLatency();
     const download = await measureDirection("download");
     const upload = await measureDirection("upload");
+    const profile = await profileTask;
     const elapsedSeconds = (Date.now() - startedAt) / 1000;
 
     finish({
-        title: `${SCRIPT_NAME} · ${nodeName}`,
+        title: `⚡️ ${SCRIPT_NAME} · ${nodeName}`,
         message: [
-            `延迟：${formatLatency(latency)} ms`,
-            `下载：${formatSpeed(download.bps)} Mbps`,
-            `上传：${formatSpeed(upload.bps)} Mbps`,
-            `样本：下载 ${download.points.length} 次 / 上传 ${upload.points.length} 次`,
-            `耗时：${elapsedSeconds.toFixed(1)} 秒`,
+            `🌐 IP：${profile.ip}`,
+            `🧼 IP 纯净度：${profile.purity.label}${profile.purity.detail ? `（${profile.purity.detail}）` : ""}`,
+            `🏠 家宽 ISP：${profile.isp.home.label}${profile.isp.home.detail ? `（${profile.isp.home.detail}）` : ""}`,
+            `🔀 双 ISP：${profile.isp.dual.label}${profile.isp.dual.detail ? `（${profile.isp.dual.detail}）` : ""}`,
+            `📡 ISP：${profile.isp.primary || "⚪ 未识别"}`,
             "",
-            "测速请求已按当前节点转发；结果包含本地网络与节点出口链路。",
-            "测速源：speed.cloudflare.com",
+            `📶 延迟：${formatLatency(latency)} ms`,
+            `⬇️ 下载：${formatSpeed(download.bps)} Mbps`,
+            `⬆️ 上传：${formatSpeed(upload.bps)} Mbps`,
+            `🧪 样本：下载 ${download.points.length} 次 / 上传 ${upload.points.length} 次`,
+            `⏱️ 耗时：${elapsedSeconds.toFixed(1)} 秒`,
+            "",
+            "🛡️ IP 信息请求与测速请求均按当前节点转发。",
+            "☁️ 测速源：speed.cloudflare.com",
         ].join("\n"),
     });
+}
+
+async function discoverIPProfile() {
+    const results = await Promise.all([
+        capture(requestJson(IPPURE_URL)),
+        capture(requestJson(IPAPI_URL)),
+    ]);
+    const ippure = results[0].ok ? results[0].value : {};
+    const ipapi = results[1].ok ? results[1].value : {};
+    const ip = firstValidIP([ippure.ip, ipapi.ip]);
+
+    if (!results[0].ok) console.log(`[WARN] IPPure: ${results[0].error}`);
+    if (!results[1].ok) console.log(`[WARN] ipapi.is: ${results[1].error}`);
+
+    return {
+        ip: ip || "⚪ 未获取",
+        purity: classifyPurity(ippure.fraudScore),
+        isp: classifyISP(ippure, ipapi),
+    };
+}
+
+function classifyPurity(value) {
+    const score = numberOrNull(value);
+    if (score === null || score < 0 || score > 100) {
+        return { label: "⚪ 未知", detail: "IPPure 未返回风险分" };
+    }
+    if (score < 40) return { label: "🟢 较纯净", detail: `风险 ${score}/100` };
+    if (score < 70) return { label: "🟠 一般", detail: `风险 ${score}/100` };
+    if (score < 80) return { label: "🔴 有风险", detail: `风险 ${score}/100` };
+    return { label: "⛔ 高风险", detail: `风险 ${score}/100` };
+}
+
+function classifyISP(ippure, ipapi) {
+    const company = ipapi && ipapi.company ? ipapi.company : {};
+    const asn = ipapi && ipapi.asn ? ipapi.asn : {};
+    const candidates = [
+        ippure && ippure.isp,
+        company.name,
+        asn.org,
+        ippure && ippure.asOrganization,
+    ];
+    const providers = uniqueProviders(candidates);
+    const primary = providers[0] || "";
+    const type = cleanValue(company.type);
+    const signalText = [type, company.name, asn.org, ippure && ippure.isp].filter(Boolean).join(" ");
+    const normalized = signalText.toLowerCase();
+    const datacenter = ipapi && ipapi.datacenter
+        ? Object.keys(ipapi.datacenter).some((key) => cleanValue(ipapi.datacenter[key]))
+        : false;
+    const hostingSignal = datacenter || /(hosting|data\s*center|datacenter|cloud|server|transit|cdn|vpn|proxy)/i.test(normalized);
+    const residentialSignal = /(residential|fixed\s*line\s*isp|mobile\s*isp|broadband|cable|fiber|telecom|wireless|\bisp\b)/i.test(normalized);
+
+    let home;
+    if (hostingSignal) {
+        home = { label: "🔴 否", detail: type || "检测到机房/云服务信号" };
+    } else if (residentialSignal) {
+        home = { label: "🟢 是", detail: type || "检测到 ISP/宽带信号" };
+    } else {
+        home = { label: "⚪ 未知", detail: type || "数据不足，不能确认" };
+    }
+
+    const dual = providers.length > 1
+        ? { label: "🟠 疑似", detail: providers.slice(0, 2).join(" / ") }
+        : { label: "⚪ 未识别", detail: "未发现两个独立网络名称" };
+
+    return { primary, providers, home, dual };
+}
+
+function uniqueProviders(values) {
+    const result = [];
+    const keys = [];
+    (values || []).forEach((value) => {
+        const name = cleanValue(value);
+        const key = providerKey(name);
+        if (!name || key.length < 3 || keys.some((item) => item === key || item.indexOf(key) >= 0 || key.indexOf(item) >= 0)) return;
+        result.push(name);
+        keys.push(key);
+    });
+    return result;
+}
+
+function providerKey(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/\bas\s*\d+\b/g, "")
+        .replace(/\b(inc|llc|ltd|limited|corp|corporation|company|communications?|network|networks|internet|services?)\b/g, "")
+        .replace(/[^a-z0-9]+/g, "");
 }
 
 async function measureLatency() {
@@ -197,6 +294,51 @@ function formatSpeed(bitsPerSecond) {
 
 function formatLatency(value) {
     return Number(value).toFixed(0);
+}
+
+function requestJson(url, options) {
+    const config = options || {};
+    return request(config.method || "GET", url, config).then((response) => {
+        try {
+            return JSON.parse(String(response.body || ""));
+        } catch (_) {
+            throw new Error("JSON 响应解析失败");
+        }
+    });
+}
+
+function capture(promise) {
+    return Promise.resolve(promise).then(
+        (value) => ({ ok: true, value }),
+        (error) => ({ ok: false, error: errorMessage(error) })
+    );
+}
+
+function firstValidIP(values) {
+    for (let index = 0; index < values.length; index += 1) {
+        const value = String(values[index] || "").trim();
+        if (isIPv4(value) || /^[0-9a-f:]+$/i.test(value) && value.indexOf(":") >= 0) return value;
+    }
+    return "";
+}
+
+function isIPv4(value) {
+    const parts = String(value || "").trim().split(".");
+    return parts.length === 4 && parts.every((part) => {
+        return /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255;
+    });
+}
+
+function numberOrNull(value) {
+    if (value === null || typeof value === "undefined" || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+}
+
+function cleanValue(value) {
+    if (value === null || typeof value === "undefined") return "";
+    const text = String(value).trim();
+    return /^(null|undefined|n\/a|unknown|-)$/i.test(text) ? "" : text;
 }
 
 function cacheBust() {

@@ -5,6 +5,10 @@
 - 延迟
 - 下载速度
 - 上传速度
+- 当前节点出口 IP
+- IPPure 风险分数对应的 IP 纯净度分档
+- 家宽 ISP 判断
+- 多来源 ISP 名称对比，用于提示疑似双 ISP
 
 ## 安装
 
@@ -33,6 +37,8 @@ event-interaction quanx-node-speed-qx.js, tag=节点网速测速, img-url=bolt.f
 ## 结果说明
 
 测速请求通过 Quantumult X 的 `opts.policy` 指定当前节点，因此结果反映的是“本地网络 → 当前节点 → Cloudflare 边缘”的综合表现，不等同于服务器网卡的理论峰值。不同时间、地区、移动网络和测速边缘节点都会造成结果变化。
+
+IP 信息请求也会通过当前节点发送，结果中会展示出口 IP、IPPure 风险分数、ISP 名称和 `ipapi.is` 公司类型。家宽 ISP 与双 ISP 都是基于公开数据库字段的判断：数据库缺失、命名不一致或存在分流时会显示“未知/疑似”，不能替代人工核验或付费 IP 数据库。
 
 下载/上传接口依据 Cloudflare Speedtest 开源项目的配置说明：
 
